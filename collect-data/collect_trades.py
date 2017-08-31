@@ -3,56 +3,56 @@ import time
 import json
 from pymongo import MongoClient
 import sys
+import dateutil.parser
 
-api = 'https://api.bitfinex.com/v1'
+import gdax
+
+SAMPLE_RATE=5
+
 symbol = sys.argv[1]
-limit = 1000
+public_client = gdax.PublicClient()
+
 
 client = MongoClient()
 db = client['bitmicro']
-ltc_trades = db[symbol+'_trades']
+ltc_trades = db[symbol[:3]+'_trades']
 
 
 def format_trade(trade):
     '''
     Formats trade data
     '''
-    if all(key in trade for key in ('tid', 'amount', 'price', 'timestamp')):
-        trade['_id'] = trade.pop('tid')
-        trade['amount'] = float(trade['amount'])
-        trade['price'] = float(trade['price'])
-        trade['timestamp'] = float(trade['timestamp'])
+    formated = {}
+    formated['_id'] = long(trade['trade_id'])
+    formated['amount'] = float(trade['size'])
+    formated['price'] = float(trade['price'])
+    formated['timestamp'] = dateutil.parser.parse(trade['time']).strftime('%s')
+    formated['side'] = trade['side']
+    return formated
 
-    return trade
 
-
-def get_json(url):
+def get_json():
     '''
     Gets json from the API
     '''
-    resp = urllib2.urlopen(url)
-    return json.load(resp, object_hook=format_trade), resp.getcode()
-
+    trades = public_client.get_product_trades(symbol)
+    return map(format_trade, trades)
+    
 
 print 'Running...'
 last_timestamp = 0
 while True:
     start = time.time()
-    url = '{0}/trades/{1}usd?timestamp={2}&limit_trades={3}'\
-        .format(api, symbol, last_timestamp, limit)
     try:
-        trades, code = get_json(url)
+        trades = get_json()
     except Exception as e:
         print e
         sys.exc_clear()
     else:
-        if code != 200:
-            print code
-        else:
-            for trade in trades:
-                ltc_trades.update_one({'_id': trade['_id']},
-                                      {'$setOnInsert': trade}, upsert=True)
-            last_timestamp = trades[0]['timestamp'] - 5
-            time_delta = time.time()-start
-            if time_delta < 1.0:
-                time.sleep(1-time_delta)
+        print trades
+        for trade in trades:
+            ltc_trades.update_one({'_id': trade['_id']},{'$setOnInsert': trade}, upsert=True)
+        
+        time_delta = time.time()-start
+        if time_delta < SAMPLE_RATE:
+            time.sleep(SAMPLE_RATE-time_delta)

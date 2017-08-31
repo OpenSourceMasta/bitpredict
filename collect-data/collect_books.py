@@ -3,51 +3,59 @@ import time
 import json
 from pymongo import MongoClient
 import sys
+import gdax
+from itertools import izip
 
-api = 'https://api.bitfinex.com/v1'
+
+SAMPLE_RATE = 5 #seconds
+
 symbol = sys.argv[1]
-limit = 25
-book_url = '{0}/book/{1}usd?limit_bids={2}&limit_asks={2}'\
-    .format(api, symbol, limit)
+public_client = gdax.PublicClient()
 
 client = MongoClient()
 db = client['bitmicro']
-ltc_books = db[symbol+'_books']
+ltc_books = db[symbol[:3]+'_books']
 
 
-def format_book_entry(entry):
+def format_book(entry):
     '''
     Converts book data to float
     '''
-    if all(key in entry for key in ('amount', 'price', 'timestamp')):
-        entry['amount'] = float(entry['amount'])
-        entry['price'] = float(entry['price'])
-        entry['timestamp'] = float(entry['timestamp'])
-    return entry
+    def format_entry(arr):
+        d = {}
+        d['price'] = float(arr[1])
+        d['amount'] = float(arr[0])
+        return d
+
+    seq = entry.pop('sequence')
+    
+    formated  = {k: map(format_entry,v) for k, v in entry.items()}
+    formated['_id'] = seq
+    return formated
 
 
-def get_json(url):
+def get_json():
     '''
     Gets json from the API
     '''
-    resp = urllib2.urlopen(url)
-    return json.load(resp, object_hook=format_book_entry), resp.getcode()
+    book = public_client.get_product_order_book(sys.argv[1], level=2)
+    
+    return format_book(book)
 
 
 print 'Running...'
 while True:
     start = time.time()
     try:
-        book, code = get_json(book_url)
+        book = get_json()
+        print book
     except Exception as e:
         print e
         sys.exc_clear()
     else:
-        if code != 200:
-            print code
-        else:
-            book['_id'] = time.time()
-            ltc_books.insert_one(book)
-            time_delta = time.time()-start
-            if time_delta < 1.0:
-                time.sleep(1-time_delta)
+        book['_id'] = time.time()
+        ltc_books.insert_one(book)
+        time_delta = time.time()-start
+        if time_delta < SAMPLE_RATE:
+            print "gotta heckin sleep"
+            time.sleep(SAMPLE_RATE-time_delta)
